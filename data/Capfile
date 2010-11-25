@@ -1,0 +1,66 @@
+###
+# Capfile to upload Ale's NS5-derived astrocyte H3K4me3 ChIPseq data
+# to an (eu-west-1) EBS volume and snapshot it.
+
+require 'catpaws'
+
+set :aws_access_key,  ENV['AMAZON_ACCESS_KEY']
+set :aws_secret_access_key , ENV['AMAZON_SECRET_ACCESS_KEY']
+set :ec2_url, ENV['EC2_URL']
+set :ebs_zone, ENV['EBS_AVAILABILITY_ZONE']
+set :ssh_options, { :user => "ubuntu", :keys=>[ENV['EC2_KEYFILE']]}
+set :nhosts, 1
+set :key, ENV['EC2_KEY']
+set :key_file, ENV['EC2_KEYFILE']
+set :ami, 'ami-cf4d67bb'  #EC2 eu-west-1 
+set :instance_type, 'm1.small'
+set :group_name, 'CTX12_H3K4me4_ChIPseq_mini'
+set :dev, '/dev/sdf'
+set :mount_point, '/data'
+
+set :ebs_size, 10
+set :availability_zone, 'eu-west-1a' 
+
+vol_id = `cat VOLUMEID`.chomp
+set :vol_id, vol_id 
+
+#before getting to here, you should run
+#cap EC2:start
+#cap EBS:create
+#cap EBS:attach
+#cap EBS:format_xfs
+#cap EBS:mount_xfs
+
+
+set :input, 'CTX12_input_CMN052_s_4_export.zip'
+set :ip, 'CTX12_H3K4me3_CME053_s_1_export.zip'
+
+
+desc "Upload each dataset one to the new EBS volume"
+task :upload_data, :roles => proc{fetch :group_name} do
+  upload(input, "#{mount_point}/#{input}")
+  upload(ip, "#{mount_point}/#{ip}")
+end
+before 'upload_data', 'EC2:start'
+
+
+desc "Unpack each dataset one to the new EBS volume"
+task :unpack_data, :roles => proc{fetch :group_name} do
+  sudo "apt-get install -y unzip"
+  run "cd #{mount_point} && unzip #{input}"
+  run "cd #{mount_point} && rm #{input}"
+  run "cd #{mount_point} && unzip #{ip}"
+  run "cd #{mount_point} && rm #{ip}"
+end
+before 'unpack_data', 'EC2:start'
+
+
+
+
+#and once that's done
+
+# cap EBS:snapshot
+# cap EBS:unmount
+# cap EBS:detach
+# cap EBS:delete
+# cap EC2:stop
