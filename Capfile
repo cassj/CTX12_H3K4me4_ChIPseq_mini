@@ -19,26 +19,21 @@ set :working_dir, '/mnt/work'
 
 #note to self
 #ami-52794c26 32bit Lucid
-#ami-505c6924 64bit Maverick
+#ami-505c6924 64bit Maverick - this doesn't work for some reason. Hmm.
 #ami-20794c54 64bit Lucid
 
 set :nhosts, 1
-set :group_name, 'ns5_h3k4me3_chipseq'
+set :group_name, 'CTX12_H3K4me4_ChIPseq_mini'
 
 set :snap_id, `cat SNAPID`.chomp #ec2 eu-west-1 
 set :vol_id, `cat VOLUMEID`.chomp #empty until you've created a new volume
-set :ebs_size, 50  #Needs to be the size of the snap plus enough space for alignments
-set :ebs_zone, 'eu-west-1b'  #is where the ubuntu ami is
+set :ebs_size, 30  #Needs to be the size of the snap plus enough space for alignments
+set :availability_zone, 'eu-west-1b'  #is where the ubuntu ami is
 set :dev, '/dev/sdf'
 set :mount_point, '/mnt/data'
 
-set :input, "#{mount_point}/CMN038.export.txt"
-set :ip, "#{mount_point}/CMN039.export.txt"
-
-#grab the snapshot ID for the raw data (fastq)
-task :get_snap_id, :roles=>:master do
-  `curl http://github.com/cassj/ns5_h3k4me3_chipseq/raw/master/data/SNAPID > SNAPID `
-end 
+ip = "#{mount_point}/CTX12_H3K4me3_CME053_s_1_export.txt"  
+input = "#{mount_point}/CTX12_input_CMN052_s_4_export.txt"
 
 
 #make a new EBS volume from this snap 
@@ -83,7 +78,8 @@ before 's3_config', 'EC2:start'
 
 #get the current mouse genome (which I already have on S3).
 task :fetch_genome, :roles => group_name do
-  run "s3cmd get --force s3://bowtie.mm9/mm9.ebwt.zip #{working_dir}/bowtie-0.12.7/indexes/mm9.ebwt.zip"
+  sudo "apt-get install -y unzip"
+  run "s3cmd get --force s3://genome-mm9-bowtie/mm9.ebwt.zip #{working_dir}/bowtie-0.12.7/indexes/mm9.ebwt.zip"
   run "rm -Rf #{working_dir}/bowtie-0.12.7/indexes/chr*"
   run "cd  #{working_dir}/bowtie-0.12.7/indexes && unzip -o mm9.ebwt.zip"
 end 
@@ -92,42 +88,49 @@ before "fetch_genome","EC2:start"
 
 # convert the export.txt file to fastq for alignment
 task :make_fastq, :roles => group_name do 
-  run "curl http://github.com/cassj/ns5_h3k4me3_chipseq/raw/master/scripts/export2fastq.pl > #{working_dir}/export2fastq.pl"
+  upload('scripts/export2fastq.pl', "#{working_dir}/export2fastq.pl")
   run "chmod +x #{working_dir}/export2fastq.pl"
   run "sudo mv #{working_dir}/export2fastq.pl /usr/local/bin/"
-  ip_o = ip.sub('.export.txt', '.fastq')
-  input_o = input.sub('.export.txt', '.fastq')
-  run "export2fastq.pl #{input} > #{input_o}"
+
+  ip_o = ip.sub('_export.txt', '.fastq')
+  input_o = input.sub('_export.txt', '.fastq')
+
   run "export2fastq.pl #{ip} > #{ip_o}"
+  run "export2fastq.pl #{input} > #{input_o}"
+
 end
+
 before 'make_fastq', 'EC2:start' 
 
 
 
 # run bowtie on the fastq file
-# This is early Illumina data, I'm assuming qualities are solexa ASCII(QSolexa+64) scores. but they might not be. 
-# they *might* be standard fastq 
+# This is recent Illumina data from GIS. I am assuming the qualities
+# are post v1.6
+desc "bowtie alignment"
 task :run_bowtie, :roles => group_name do
 
-  ip_i = ip.sub('.export.txt', '.fastq')
-  input_i = input.sub('.export.txt', '.fastq')
+  #input files
+  ip_i = ip.sub('_export.txt', '.fastq')
+  input_i = input.sub('_export.txt', '.fastq')
 
-  ip_o = ip.sub('.export.txt', '.sam')
-  input_o = input.sub('.export.txt', '.sam')
+  #output files
+  ip_o = ip.sub('_export.txt', '.sam')
+  input_o = input.sub('_export.txt', '.sam')
   
-  run "#{working_dir}/bowtie-0.12.7/bowtie --sam --al --best --solexa-quals  -q mm9 #{ip_i} > #{ip_o}"
-  run "#{working_dir}/bowtie-0.12.7/bowtie --sam --al --best --solexa-quals  -q mm9 #{input_i} > #{input_o}"
+
+  run "#{working_dir}/bowtie-0.12.7/bowtie --sam --al --best --phred64-quals  -q mm9 #{ip_i} > #{ip_o}"
+  run "#{working_dir}/bowtie-0.12.7/bowtie --sam --al --best --phred64-quals  -q mm9 #{input_i} > #{input_o}"
 
 end
 before "run_bowtie", "EC2:start"
-
 
 
 # fetch samtools from svn
 desc "get samtools"
 task :get_samtools, :roles => group_name do
   sudo "apt-get -y install subversion"
-  run "svn co https://samtools.svn.sourceforge.net/svnroot/samtools/trunk/samtools"
+  run "cd #{working_dir} && svn co https://samtools.svn.sourceforge.net/svnroot/samtools/trunk/samtools"
 end
 before "get_samtools", "EC2:start"
 
@@ -135,21 +138,21 @@ before "get_samtools", "EC2:start"
 desc "build samtools"
 task :build_samtools, :roles => group_name do
   sudo "apt-get -y install zlib1g-dev libncurses5-dev"
-  run "cd /home/ubuntu/samtools && make"
+  run "cd #{working_dir}/samtools && make"
 end
 before "build_samtools", "EC2:start"
 
 
 desc "install samtools"
 task :install_samtools, :roles => group_name do
-  sudo "cp /home/ubuntu/samtools/samtools /usr/local/bin/samtools"
+  sudo "cp #{working_dir}/samtools/samtools /usr/local/bin/samtools"
 end
 before "install_samtools", "EC2:start"
 
 
 desc "make bam from sam"
 task :to_bam, :roles => group_name do
-  run "wget -O #{working_dir}/mm9_lengths  'http://github.com/cassj/my_bioinfo_scripts/raw/master/genomes/mm9_lengths'"
+  run "curl  'http://github.com/cassj/my_bioinfo_scripts/raw/master/genomes/mm9_lengths' > #{working_dir}/mm9_lengths "
   files = capture "ls #{mount_point}"
   files = files.split("\n").select{|f| f.match(/\.sam/)}
   files.each{|f| 
@@ -158,7 +161,6 @@ task :to_bam, :roles => group_name do
   }
 end
 before "to_bam", "EC2:start"
-
 
 
 desc "sort bam"
@@ -171,7 +173,6 @@ task :sort_bam, :roles => group_name do
   }
 end
 before "sort_bam", "EC2:start"
-
 
 
 desc "remove duplicates"
@@ -229,6 +230,91 @@ task :bam_tidy, :roles =>group_name do
 end 
 before "bam_tidy", 'EC2:start'
 
+
+
+### Macs ?
+
+macs_url ="http://liulab.dfci.harvard.edu/MACS/src/MACS-1.4.0beta.tar.gz"
+macs_version = "MACS-1.4.0beta"
+
+task :install_macs, :roles => group_name do
+  sudo "apt-get install -y python"
+  run "cd #{working_dir} && wget --http-user macs --http-passwd chipseq #{macs_url}"
+  run "cd #{working_dir} && tar -xvzf #{macs_version}.tar.gz"
+  run "cd #{working_dir}/#{macs_version} && sudo python setup.py install"
+  sudo "ln -s /usr/local/bin/macs* /usr/local/bin/macs"
+end
+before "install_macs", 'EC2:start'
+
+task :install_peaksplitter, :roles => group_name do
+  url ='http://www.ebi.ac.uk/bertone/software/PeakSplitter_Cpp_1.0.tar.gz'
+  filename = 'PeakSplitter_Cpp_1.0.tar.gz'
+  bin = 'PeakSplitter_Cpp/PeakSplitter_Linux64/PeakSplitter'
+  run "cd #{working_dir} && curl #{url} > #{filename}"
+  run "cd #{working_dir} && tar -xvzf #{filename}"
+  run "sudo cp #{working_dir}/#{bin} /usr/local/bin/PeakSplitter"
+end 
+before 'install_peaksplitter', 'EC2:start'
+
+#you'll need to have done "install_r" and install_peak_splitter to do this
+task :run_macs, :roles => group_name do
+
+  treatment = "#{mount_point}/CMN039_sorted_nodups.bam"
+  control = "#{mount_point}/CMN038_sorted_nodups.bam"
+  genome = 'mm'
+  bws = [300]
+  pvalues = [0.00001]
+
+  #unsure what p values and bandwidths are appropriate, try a few?
+  bws.each {|bw|
+    pvalues.each { |pvalue|
+
+      dir = "#{mount_point}/macs_#{bw}_#{pvalue}"
+      run "rm -Rf #{dir}"
+      run "mkdir #{dir}"
+
+      macs_cmd =  "macs --treatment #{treatment} --control #{control} --name #{group_name} --format BAM --gsize #{genome} --bw #{bw} --pvalue #{pvalue}"
+      run "cd #{dir} && #{macs_cmd}"
+      
+      dir = "#{mount_point}/macs_#{bw}_#{pvalue}_subpeaks"
+      run "rm -Rf #{dir}"
+      run "mkdir #{dir}"
+
+      # With SubPeak finding
+      # this will take a lot longer as you have to save the wig file 
+      macs_cmd =  "macs --treatment #{treatment} --control #{control} --name #{group_name} --format BAM --gsize #{genome} --call-subpeaks  --bw #{bw} --pvalue #{pvalue} --wig"
+      run "cd #{dir} && #{macs_cmd}"
+
+    }
+  }
+  
+end
+before 'run_macs', 'EC2:start'
+
+#pack up the runs and downloads them to the server (without the wig files)
+task :pack_macs, :roles => group_name do
+  macs_dirs = capture "ls #{mount_point}"
+  macs_dirs = macs_dirs.split("\n").select {|f| f.match(/.*macs.*/)}
+  macs_dirs.each{|d|
+    run "cd #{mount_point} &&  tar --exclude *_wiggle* -cvzf #{d}.tgz #{d}"
+  }
+  
+end
+before 'pack_macs','EC2:start' 
+
+task :get_macs, :roles => group_name do
+  macs_files = capture "ls #{mount_point}"
+  macs_files = macs_files.split("\n").select {|f| f.match(/.*macs.*\.tgz/)}
+  res_dir = 'results/alignment/bowtie/peakfinding/macs'
+  `rm -Rf #{res_dir}`
+  `mkdir -p #{res_dir}`
+  macs_files.each{|f| 
+    download("#{mount_point}/#{f}", "#{res_dir}/#{f}") 
+    `cd #{res_dir} && tar -xvzf #{f}`
+  }
+
+end
+before 'get_macs', 'EC2:start'
 
 
 
