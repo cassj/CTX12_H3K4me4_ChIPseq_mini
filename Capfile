@@ -240,8 +240,10 @@ macs_version = "MACS-1.4.0beta"
 task :install_macs, :roles => group_name do
   sudo "apt-get install -y python"
   run "cd #{working_dir} && wget --http-user macs --http-passwd chipseq #{macs_url}"
+  
   run "cd #{working_dir} && tar -xvzf #{macs_version}.tar.gz"
   run "cd #{working_dir}/#{macs_version} && sudo python setup.py install"
+  sudo "rm -f /usr/local/bin/macs"
   sudo "ln -s /usr/local/bin/macs* /usr/local/bin/macs"
 end
 before "install_macs", 'EC2:start'
@@ -259,8 +261,8 @@ before 'install_peaksplitter', 'EC2:start'
 #you'll need to have done "install_r" and install_peak_splitter to do this
 task :run_macs, :roles => group_name do
 
-  treatment = "#{mount_point}/CMN039_sorted_nodups.bam"
-  control = "#{mount_point}/CMN038_sorted_nodups.bam"
+  treatment = "#{mount_point}/CTX12_H3K4me3_CME053_s_1_sorted_nodups.bam"
+  control = "#{mount_point}/CTX12_input_CMN052_s_4_sorted_nodups.bam"
   genome = 'mm'
   bws = [300]
   pvalues = [0.00001]
@@ -276,14 +278,14 @@ task :run_macs, :roles => group_name do
       macs_cmd =  "macs --treatment #{treatment} --control #{control} --name #{group_name} --format BAM --gsize #{genome} --bw #{bw} --pvalue #{pvalue}"
       run "cd #{dir} && #{macs_cmd}"
       
-      dir = "#{mount_point}/macs_#{bw}_#{pvalue}_subpeaks"
-      run "rm -Rf #{dir}"
-      run "mkdir #{dir}"
+#      dir = "#{mount_point}/macs_#{bw}_#{pvalue}_subpeaks"
+#      run "rm -Rf #{dir}"
+#      run "mkdir #{dir}"
 
       # With SubPeak finding
       # this will take a lot longer as you have to save the wig file 
-      macs_cmd =  "macs --treatment #{treatment} --control #{control} --name #{group_name} --format BAM --gsize #{genome} --call-subpeaks  --bw #{bw} --pvalue #{pvalue} --wig"
-      run "cd #{dir} && #{macs_cmd}"
+#      macs_cmd =  "macs --treatment #{treatment} --control #{control} --name #{group_name} --format BAM --gsize #{genome} --call-subpeaks  --bw #{bw} --pvalue #{pvalue} --wig"
+#      run "cd #{dir} && #{macs_cmd}"
 
     }
   }
